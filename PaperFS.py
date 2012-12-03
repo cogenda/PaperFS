@@ -9,12 +9,13 @@ import os, os.path
 import datetime, calendar
 from sys import argv, exit
 from time import time
+import re
 
 from fusepy import FUSE, FuseOSError, Operations, LoggingMixIn
 
 import u1db
 import DataModel
-import re
+from SearchPaper import *
 from Utils import *
 
 if not hasattr(__builtins__, 'bytes'):
@@ -232,13 +233,29 @@ class FSObject(object):
         if not self.parent is None:
             return self.parent.newFileHandle(obj)
 
-class SearchResult(FSObject):
+class DirObject(FSObject):
+    def __init__(self, name, parent, stat=None):
+
+        self.name = name
+        self.parent=parent
+        if stat:
+            self.stat=stat
+        else:
+            self.stat=Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
+
+        self.fh = self.newFileHandle(self)
+
+class FileObject(FSObject):
+    pass
+
+
+class DirSearch(DirObject):
     '''
     Search result as a directory
     '''
     class Iter(object):
-        def __init__(self, res):
-            self.res = res
+        def __init__(self, obj):
+            self.obj = obj
             self.curDot  = 0 # cursor for . and ..
             self.curSrch = 0 # cursor for sub-searches
             self.curPapr = 0 # cursor for papers
@@ -251,14 +268,14 @@ class SearchResult(FSObject):
                 self.curDot = 2
                 return '..'
 
-            if self.curSrch<len(self.res.searches):
-                r = self.res.searches[self.curSrch]
+            if self.curSrch<len(self.obj.searches):
+                r = self.obj.searches[self.curSrch]
                 self.curSrch += 1
-                if isinstance(r, SearchResult):
+                if isinstance(r, DirSearch):
                     return r.name
 
-            if self.curPapr<len(self.res.papers):
-                r = self.res.papers[self.curPapr]
+            if self.curPapr<len(self.obj.papers):
+                r = self.obj.papers[self.curPapr]
                 self.curPapr += 1
                 return r
 
@@ -267,17 +284,19 @@ class SearchResult(FSObject):
         def __iter__(self):
             return self
 
-    def __init__(self, db, name, parent):
-        if not isinstance(db, u1db.Database):
-            raise TypeError
-        self.db = db
-        self.name = name
-        self.parent = parent
-        self.fh = self.newFileHandle(self)
+    def __init__(self, name, parent, search):
+        super(DirSearch, self).__init__(name, parent)
+        self.search = search
 
+        self.populated = False
         self.papers = []
         self.mapPapers = {}
-        self.stat = Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
+        self.statPapers = Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
+
+        self.searches = []
+
+    def _populate(self):
+        if self.populated: return
 
         def _incName(fname0):
             fname = fname0
@@ -287,51 +306,45 @@ class SearchResult(FSObject):
                 cnt += 1
             return fname
 
-        _, docs = self.db.get_all_docs()
-        for doc in docs:
-            if not isinstance(doc, u1db.Document): continue
-
-            paper = DataModel.Paper.fromDict(doc.content)
+        self.search.execute()
+        for paper in self.search.papers():
             if not paper.title is None and len(paper.title)>0:
                 title = _incName(cleanFilename(paper.title))
             else:
                 title = _incName('Untitled')
             self.mapPapers[title] = paper
             self.papers.append(title)
-        self.statPapers = Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
 
-        self.searches = []
-        self.parent = parent
+        self.populated = True
 
     def getattr(self, fname=None):
         if fname is None: return self.stat.toDict()
+
+        if not self.populated: self._populate()
 
         if self.mapPapers.has_key(fname):
             return self.statPapers.toDict()
         raise FuseOSError(ENOENT)
 
     def opendir(self, fname):
+        if not self.populated: self._populate()
+
         if self.mapPapers.has_key(fname):
             dirPaper = DirPaper(fname, stat=self.statPapers, parent=self)
             return dirPaper.fh
 
     def readdir(self):
-        return SearchResult.Iter(self)
+        if not self.populated: self._populate()
 
-class DirPaper(FSObject):
+        return DirSearch.Iter(self)
+
+class DirPaper(DirObject):
     '''
     Paper as a directory
     '''
 
     def __init__(self, name, parent, stat=None):
-        self.name = name
-        self.parent=parent
-        if stat:
-            self.stat=stat
-        else:
-            self.stat=Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
-
-        self.fh = self.newFileHandle(self)
+        super(DirPaper, self).__init__(name, parent, stat)
 
         paper = self.parent.mapPapers[self.name]
         self.pdf = None
@@ -361,8 +374,41 @@ class DirPaper(FSObject):
             lst.append(self.pdf.name)
         return lst
 
-class FileObject(FSObject):
-    pass
+
+class DirSimple(DirObject):
+    def __init__(self, name, parent, stat=None):
+        super(DirSimple, self).__init__(name, parent, stat)
+
+        self.subdirs = []
+        self.mapSubdirs = {}
+
+    def appendChild(self, dobj):
+        if not isinstance(dobj, DirObject):
+            raise TypeError
+
+        self.subdirs.append(dobj.name)
+        self.mapSubdirs[dobj.name] = dobj
+
+    def getattr(self, fname=None):
+        if fname is None: return self.stat.toDict()
+
+        d = self.mapSubdirs.get(fname)
+        if isinstance(d, FSObject):
+            return d.getattr()
+
+        raise FuseOSError(ENOENT)
+
+    def opendir(self, fname):
+        d = self.mapSubdirs.get(fname)
+        if isinstance(d, FSObject):
+            return d.fh
+
+    def readdir(self):
+        lst = ['.', '..']
+        lst.extend(self.subdirs)
+
+        return lst
+
 
 class PDFFile(FileObject):
     '''
@@ -403,10 +449,16 @@ class PaperFS(LoggingMixIn, Operations):
         self.mapHandle = {}
         self.cntFH = 0
 
+    def init(self, path):
         self.db = u1db.open('papers.u1db', create=False)
 
-        root = SearchResult(self.db, 'Papers', parent=self)
+        root = DirSimple(u'Papers', parent=self)
         self.mapPath['/'] = root
+
+        search = AllPapers(self.db)
+        allpaper = DirSearch(u'All Papers', parent=root, search=search)
+        root.appendChild(allpaper)
+
 
     def newFileHandle(self, obj=None):
         fh = self.cntFH
@@ -448,12 +500,8 @@ class PaperFS(LoggingMixIn, Operations):
         else:
             fsobj, fname = self.mapHandle.get(fh), None
 
-        if isinstance(fsobj, SearchResult):
+        if isinstance(fsobj, DirObject):
             return fsobj.readdir()
-        elif isinstance(fsobj, DirPaper):
-            return fsobj.readdir()
-        else:
-            return ['.', '..']
 
     def getattr(self, path, fh=None):
         fsobj, fname = None, None
@@ -508,4 +556,5 @@ if __name__ == '__main__':
         exit(1)
 
     logging.getLogger().setLevel(logging.DEBUG)
-    fuse = FUSE(PaperFS(), argv[1], foreground=True)
+    fuse = FUSE(PaperFS(), argv[1], foreground=True, nothreads=True, fsname=u'Papers')
+
