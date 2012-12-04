@@ -224,26 +224,36 @@ class FSObject(object):
     Attributes:
     name: str
     stat: Stat
-    parent: Dir or None
+    parent: Dir or file system
     """
-    def __repr__(self):
-        return "<%s %s>" % (type(self).__name__, self.name)
-
-    def newFileHandle(self, obj=None):
-        if not self.parent is None:
-            return self.parent.newFileHandle(obj)
-
-class DirObject(FSObject):
     def __init__(self, name, parent, stat=None):
-
         self.name = name
         self.parent=parent
+
+        if isinstance(parent, Operations):
+            self.fsys = parent
+        elif isinstance(parent, FSObject):
+            self.fsys = parent.fsys
+        else:
+            raise TypeError
+
         if stat:
             self.stat=stat
         else:
-            self.stat=Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
+            self.stat=Stat(S_IFREG|0644, 0, st_nlink=1)
 
-        self.fh = self.newFileHandle(self)
+    def __repr__(self):
+        return "<%s %s>" % (type(self).__name__, self.name)
+
+class DirObject(FSObject):
+    def __init__(self, name, parent, stat=None):
+        if stat is None:
+            stat=Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
+
+        super(DirObject, self).__init__(name, parent, stat)
+
+        self.fh = self.fsys.newFileHandle(self)
+
 
 class FileObject(FSObject):
     pass
@@ -307,13 +317,25 @@ class DirSearch(DirObject):
             return fname
 
         self.search.execute()
+
         for paper in self.search.papers():
+            if not paper.authors is None and len(paper.authors)>0:
+                author = unicode(paper.authors[0])
+            else:
+                author = ''
+            if not paper.year is None:
+                year = '%d' % paper.year
+            else:
+                year = ''
             if not paper.title is None and len(paper.title)>0:
                 title = _incName(cleanFilename(paper.title))
             else:
                 title = _incName('Untitled')
-            self.mapPapers[title] = paper
-            self.papers.append(title)
+
+            name = '%s (%s) %s' % (author, year, title)
+
+            self.mapPapers[name] = paper
+            self.papers.append(name)
 
         self.populated = True
 
@@ -337,6 +359,39 @@ class DirSearch(DirObject):
         if not self.populated: self._populate()
 
         return DirSearch.Iter(self)
+
+class DirIndex(DirObject):
+    def __init__(self, name, parent, index, stat=None):
+        super(DirIndex, self).__init__(name, parent, stat)
+        self.index = index
+
+        self.keys    = []
+        self.mapKeys = {}
+        for key in index.keys():
+            name = cleanFilename(key)
+            self.keys.append(name)
+            self.mapKeys[name] = key
+
+        self.statSearch = Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
+
+    def getattr(self, fname=None):
+        if fname is None: return self.stat.toDict()
+
+        if fname in self.keys:
+            return self.statSearch.toDict()
+        raise FuseOSError(ENOENT)
+
+
+    def opendir(self, fname):
+        if self.mapKeys.has_key(fname):
+            key = self.mapKeys[fname]
+            search = self.index.get(key)
+            dirSearch = DirSearch('fname', self, search)
+            return dirSearch.fh
+
+    def readdir(self):
+        return self.keys
+
 
 class DirPaper(DirObject):
     '''
@@ -389,6 +444,10 @@ class DirSimple(DirObject):
         self.subdirs.append(dobj.name)
         self.mapSubdirs[dobj.name] = dobj
 
+    def clear(self):
+        self.subdirs = []
+        self.mapSubdirs = {}
+
     def getattr(self, fname=None):
         if fname is None: return self.stat.toDict()
 
@@ -409,15 +468,39 @@ class DirSimple(DirObject):
 
         return lst
 
+    def mkdir(self, fname):
+        dobj = DirSimple(fname, parent=self)
+        self.appendChild(dobj)
+
+    def rename(self, ofname, nfname):
+        dobj = self.mapSubdirs[ofname]
+        if not isinstance(dobj, DirSimple):
+            raise TypeError
+
+        self.subdirs[ self.subdirs.index(ofname) ] = nfname
+        del self.mapSubdirs[ofname]
+        self.mapSubdirs[nfname] = dobj
+
+        dobj.clear()
+        dobj.name = nfname
+
+        key = u'%s*' % nfname.lower()
+
+        s = ByAuthorName(self.fsys.db, key)
+        dAuthor = DirSearch(u'By Authors', parent=dobj, search=s)
+        dobj.appendChild(dAuthor)
+
+        s = ByTag(self.fsys.db, key)
+        dTag = DirSearch(u'By Tags', parent=dobj, search=s)
+        dobj.appendChild(dTag)
 
 class PDFFile(FileObject):
     '''
     PDF File
     '''
     def __init__(self, name, osPath, parent):
-        self.name = name
+        super(PDFFile, self).__init__(name, parent)
         self.osPath = osPath
-        self.parent = parent
 
         self.osfd = {} # map FUSE file descriptor to OS file descriptors
 
@@ -426,7 +509,7 @@ class PDFFile(FileObject):
 
     def open(self, flags):
         osfd = os.open(self.osPath, flags)
-        fh = self.newFileHandle(self)
+        fh = self.fsys.newFileHandle(self)
         self.osfd[fh] = osfd
 
         return fh
@@ -456,8 +539,17 @@ class PaperFS(LoggingMixIn, Operations):
         self.mapPath['/'] = root
 
         search = AllPapers(self.db)
-        allpaper = DirSearch(u'All Papers', parent=root, search=search)
-        root.appendChild(allpaper)
+        dirAll = DirSearch(u'All Papers', parent=root, search=search)
+        root.appendChild(dirAll)
+
+        dirIdx = DirIndex(u'By Authors', parent=root,
+                          index=IndexByAuthor(self.db))
+        root.appendChild(dirIdx)
+
+        dirIdx = DirIndex(u'By Tags', parent=root,
+                          index=IndexByTag(self.db))
+        root.appendChild(dirIdx)
+        self.root = root
 
 
     def newFileHandle(self, obj=None):
@@ -502,6 +594,27 @@ class PaperFS(LoggingMixIn, Operations):
 
         if isinstance(fsobj, DirObject):
             return fsobj.readdir()
+
+    def mkdir(self, path, mode):
+        fsobj, fname = self._search_path(path)
+
+        if isinstance(fsobj, DirSimple):
+            fsobj.mkdir(fname)
+
+
+    def rename(self, old, new):
+        opname, ofname = os.path.split(old)
+        npname, nfname = os.path.split(new)
+        if not opname==npname:
+            raise ValueError
+
+        fsobj, _ = self._search_path(opname)
+        if isinstance(fsobj, DirSimple):
+            del self.mapPath[old]
+            fsobj.rename(ofname, nfname)
+            return
+
+        raise FuseOSError(ENOENT)
 
     def getattr(self, path, fh=None):
         fsobj, fname = None, None

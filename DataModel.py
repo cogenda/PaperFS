@@ -43,7 +43,23 @@ class Author(object):
             else:
                 return senc(self.lastname)
         else:
-            return senc(self.firstname)
+            if self.firstname:
+                return senc(self.firstname)
+            else:
+                return ''
+
+    def __unicode__(self):
+        if self.lastname:
+            if self.firstname:
+                return u'%s %s' % (self.firstname,
+                                   self.lastname)
+            else:
+                return self.lastname
+        else:
+            if self.firstname:
+                return self.firstname
+            else:
+                return u''
 
 
 class Paper(object):
