@@ -2,6 +2,7 @@ import sqlite3, os.path, pickle
 import u1db
 import DataModel
 from Utils import *
+from datetime import datetime
 
 basedir = '/home/hash/Documents/Papers'
 
@@ -143,7 +144,11 @@ def importPapers(conn, db, grp_tags):
         kwargs['pages']   = row['pages']
         kwargs['doi']     = row['doi']
         kwargs['url']     = row['url']
-        kwargs['date_import'] = row['date_import']
+
+        dt = row['date_import']
+        if dt is None: dt = 0
+        dt = datetime.utcfromtimestamp(dt + 978307200)
+        kwargs['date_import'] = dt.strftime('%Y-%m-%d %H:%M:%S')
 
         # author
         qAuthors = QZAuthorsOfPaper(conn, paper=row['_id'])
@@ -202,8 +207,8 @@ importPapers(conn, db, grp_tags)
 
 db.create_index('by-author-name',
                 '''combine(split_words(lower(authors)),
-                           split_words(lower(authors.lastname)),
-                           split_words(lower(authors.firstname)))''')
+                           split_words(lower(authors.lastname))
+                          )''')
 
 db.create_index('by-title-words', 'split_words(lower(title))')
 db.create_index('by-year',  'year')

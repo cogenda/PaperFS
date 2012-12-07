@@ -1,5 +1,5 @@
-__all__=['Search', 'AllPapers', 'ByAuthorName', 'ByTag',
-         'IndexByAuthor', 'IndexByTag']
+__all__=['Search', 'AllPapers', 'ByAuthorName', 'ByTag', 'ByTitleWords',
+         'IndexByTitle', 'IndexByAuthor', 'IndexByTag']
 
 import u1db
 import DataModel
@@ -21,6 +21,7 @@ class Search(object):
             if not isinstance(doc, u1db.Document): continue
 
             paper = DataModel.Paper.fromDict(doc.content)
+            paper.doc_id = doc.doc_id
             self._papers.append(paper)
 
 class Index(object):
@@ -46,6 +47,27 @@ class AllPapers(Search):
 
         _, docs = self.db.get_all_docs()
         self._docs2papers(docs)
+
+class ByTitleWords(Search):
+    def __init__(self, db, key):
+        super(ByTitleWords, self).__init__(db)
+
+        self.key = key
+
+    def execute(self):
+        isinstance(self.db, u1db.Database)
+        docs = self.db.get_from_index('by-title-words', self.key)
+        self._docs2papers(docs)
+
+class IndexByTitle(Index):
+    def __init__(self, db):
+        super(IndexByTitle, self).__init__(db)
+        self._keys = []
+        for k, in db.get_index_keys('by-title-words'):
+            self._keys.append(k)
+
+    def get(self, key):
+        return ByTitleWords(self.db, key)
 
 class ByAuthorName(Search):
     def __init__(self, db, key):

@@ -1,5 +1,7 @@
 __all__=['Author', 'Paper']
 
+import json
+
 def senc(s):
     if isinstance(s, unicode):
         try:
@@ -64,7 +66,7 @@ class Author(object):
 
 class Paper(object):
     def __init__(self, **kwargs):
-
+        self.doc_id     = kwargs.get('doc_id')
         self.title      = kwargs.get('title')
         self.year       = kwargs.get('year')
         self.authors    = kwargs.get('authors')
@@ -138,3 +140,11 @@ class Paper(object):
             res.append(', '.join(stags))
 
         return '; '.join(res)
+
+    def toJson(self):
+        dct = self.toDict()
+        return json.dumps(dct, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def fromJson(sJson):
+        return Paper.fromDict(json.loads(sJson))

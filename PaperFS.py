@@ -91,7 +91,17 @@ class Stat(object):
             self.st_mtime   = st.st_mtime
             self.st_ctime   = st.st_ctime
             return
-
+        elif isinstance(path_or_st_mode, Stat):
+            ostat = path_or_st_mode
+            self.st_mode    = ostat.st_mode
+            self.st_nlink   = ostat.st_nlink
+            self.st_uid     = ostat.st_uid
+            self.st_gid     = ostat.st_gid
+            self.st_size    = ostat.st_size
+            self.st_atime   = ostat.st_atime
+            self.st_mtime   = ostat.st_mtime
+            self.st_ctime   = ostat.st_ctime
+            return
         else:
             st_mode = path_or_st_mode
 
@@ -345,7 +355,10 @@ class DirSearch(DirObject):
         if not self.populated: self._populate()
 
         if self.mapPapers.has_key(fname):
-            return self.statPapers.toDict()
+            paper = self.mapPapers[fname]
+            stat = Stat(self.statPapers)
+            stat.dt_mtime = datetime.datetime.strptime(paper.date_import, '%Y-%m-%d %H:%M:%S')
+            return stat.toDict()
         raise FuseOSError(ENOENT)
 
     def opendir(self, fname):
@@ -399,20 +412,32 @@ class DirPaper(DirObject):
     '''
 
     def __init__(self, name, parent, stat=None):
+        if stat:
+            self.stat=stat
+        else:
+            self.stat=Stat(S_IFDIR|0755, 0, st_nlink=1)
         super(DirPaper, self).__init__(name, parent, stat)
 
         paper = self.parent.mapPapers[self.name]
+        self.paper = paper
+
         self.pdf = None
         if not paper.path is None:
             self.pdf = PDFFile(u'%s.pdf'%cleanFilename(paper.title),
                                os.path.join(repoDir, paper.path[0:2], paper.path),
                                self)
 
+
+        self.fjson = JsonFile(u'json.txt', self)
+
     def getattr(self, fname=None):
         if fname is None: return self.stat.toDict()
 
         if self.pdf and fname==self.pdf.name:
             return self.pdf.getattr()
+        elif fname==self.fjson.name:
+            return self.fjson.getattr()
+
         raise FuseOSError(ENOENT)
 
     def opendir(self, fname):
@@ -421,12 +446,15 @@ class DirPaper(DirObject):
     def open(self, fname, flags):
         if self.pdf and fname==self.pdf.name:
             return self.pdf.open(flags)
+        elif fname==self.fjson.name:
+            return self.fjson.open(flags)
         raise FuseOSError(ENOENT)
 
     def readdir(self):
         lst = ['.', '..']
         if self.pdf:
             lst.append(self.pdf.name)
+        lst.append(self.fjson.name)
         return lst
 
 
@@ -524,16 +552,62 @@ class PDFFile(FileObject):
         os.close(osfd)
         del self.osfd[fh]
 
+class JsonFile(FileObject):
+    ''' JsonFile
+    '''
+    def __init__(self, name, parent, stat=None):
+        if not isinstance(parent, DirPaper):
+            raise TypeError
+        super(JsonFile, self).__init__(name, parent)
+
+        self.paper = parent.paper
+        self.data = self.paper.toJson().encode('utf-8')
+        self.digest = hash(self.data)
+
+        if stat:
+            self.stat=stat
+        else:
+            self.stat=Stat(S_IFREG|0664, len(self.data), st_nlink=1)
+
+    def getattr(self):
+        return self.stat.toDict()
+
+    def open(self, flags):
+        fh = self.fsys.newFileHandle(self)
+        return fh
+
+    def read(self, fh, size, offset):
+        return self.data[offset:offset+size]
+
+    def truncate(self, fh, length):
+        self.data = self.data[:offset]
+        self.stat.st_size = len(self.data)
+
+    def write(self, fh, data, offset):
+        self.data = self.data[:offset] + data
+        self.stat.st_size = len(self.data)
+        return len(data)
+
+    def release(self, fh):
+        digest = hash(self.data)
+        if digest==self.digest: return
+
+        self.digest = digest
+
+        newPaper = DataModel.Paper.fromJson(self.data.decode('utf-8'))
+        self.fsys.modifyPaper(self.paper.doc_id, newPaper)
+
+
+
 class PaperFS(LoggingMixIn, Operations):
     'Example memory filesystem. Supports only one level of files.'
 
     def __init__(self):
-        self.mapPath = {}
-        self.mapHandle = {}
         self.cntFH = 0
 
-    def init(self, path):
-        self.db = u1db.open('papers.u1db', create=False)
+    def _init_data(self):
+        self.mapPath = {}
+        self.mapHandle = {}
 
         root = DirSimple(u'Papers', parent=self)
         self.mapPath['/'] = root
@@ -546,11 +620,18 @@ class PaperFS(LoggingMixIn, Operations):
                           index=IndexByAuthor(self.db))
         root.appendChild(dirIdx)
 
+        dirIdx = DirIndex(u'By Title Words', parent=root,
+                          index=IndexByTitle(self.db))
+        root.appendChild(dirIdx)
+
         dirIdx = DirIndex(u'By Tags', parent=root,
                           index=IndexByTag(self.db))
         root.appendChild(dirIdx)
         self.root = root
 
+    def init(self, path):
+        self.db = u1db.open('papers.u1db', create=False)
+        self._init_data()
 
     def newFileHandle(self, obj=None):
         fh = self.cntFH
@@ -558,6 +639,13 @@ class PaperFS(LoggingMixIn, Operations):
             self.mapHandle[fh] = obj
         self.cntFH += 1
         return fh
+
+    def modifyPaper(self, doc_id, paper):
+        doc = self.db.get_doc(doc_id)
+        doc.content = paper.toDict()
+        self.db.put_doc(doc)
+
+        self._init_data()
 
     def _search_path(self, path):
         pname, fname, fsobj = path, '', None
@@ -610,7 +698,8 @@ class PaperFS(LoggingMixIn, Operations):
 
         fsobj, _ = self._search_path(opname)
         if isinstance(fsobj, DirSimple):
-            del self.mapPath[old]
+            if self.mapPath.has_key(old):
+                del self.mapPath[old]
             fsobj.rename(ofname, nfname)
             return
 
@@ -653,7 +742,8 @@ class PaperFS(LoggingMixIn, Operations):
         fobj = self.mapHandle.get(fh)
         if isinstance(fobj, FileObject):
             fobj.release(fh)
-            del self.mapHandle[fh]
+            if self.mapHandle.has_key(fh):
+                del self.mapHandle[fh]
 
     def read(self, path, size, offset, fh):
         fobj = self.mapHandle.get(fh)
@@ -662,6 +752,20 @@ class PaperFS(LoggingMixIn, Operations):
             return fobj.read(fh, size, offset)
 
         raise FuseOSError(ENOENT)
+
+    def write(self, path, data, offset, fh):
+        fobj = self.mapHandle.get(fh)
+
+        if isinstance(fobj, FSObject):
+            return fobj.write(fh, data, offset)
+
+        raise FuseOSError(ENOENT)
+
+    def truncate(self, path, length, fh=None):
+        fobj = self.mapHandle.get(fh)
+
+        if isinstance(fobj, FSObject):
+            fobj.truncate(fh, length)
 
 if __name__ == '__main__':
     if len(argv) != 2:
