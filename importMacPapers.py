@@ -185,7 +185,7 @@ def importPapers(conn, db, grp_tags):
 
         if not row['path'] is None:
             pdfpath = os.path.join(basedir, row['path'])
-            pdfpath = importFile(pdfpath)
+            pdfpath, _ = importFile(pdfpath)
             kwargs['path'] = pdfpath
 
         p = DataModel.Paper(**kwargs)

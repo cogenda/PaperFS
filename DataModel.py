@@ -1,6 +1,7 @@
-__all__=['Author', 'Paper']
+__all__=['Author', 'Paper', 'TagTree']
 
 import json
+from collections import defaultdict
 
 def senc(s):
     if isinstance(s, unicode):
@@ -148,3 +149,74 @@ class Paper(object):
     @staticmethod
     def fromJson(sJson):
         return Paper.fromDict(json.loads(sJson))
+
+def _tree():
+    return defaultdict(_tree)
+
+class TagTree(object):
+
+    def __init__(self, tree=None):
+        if tree is None:
+            self._tree = _tree()
+        else:
+            self._tree = tree
+
+    def __contains__(self, tag):
+        return tag in self._tree
+
+    def __getitem__(self, tag):
+        return self._tree[tag]
+
+    def children(self):
+        return [(k,TagTree(self._tree[k])) for k in sorted(self._tree.keys())]
+
+    def toDict(self):
+        return {k: TagTree(v).toDict() for k,v in self._tree.iteritems()}
+
+    @staticmethod
+    def fromDict(dct):
+        def doDct(t, d):
+            for k,v in d.iteritems():
+                t[k]
+                doDct(t[k], v)
+
+        tree = TagTree()
+        doDct(tree, dct)
+
+        return tree
+
+    def toJson(self):
+        dct = self.toDict()
+        return json.dumps(dct, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def fromJson(sJson):
+        return TagTree.fromDict(json.loads(sJson))
+
+
+if __name__=='__main__':
+    taxonomy = TagTree()
+
+    taxonomy['Animalia']['Chordata']['Mammalia']['Carnivora']['Felidae']['Felis']['cat']
+    taxonomy['Animalia']['Chordata']['Mammalia']['Carnivora']['Felidae']['Panthera']['lion']
+    taxonomy['Animalia']['Chordata']['Mammalia']['Carnivora']['Canidae']['Canis']['dog']
+    taxonomy['Animalia']['Chordata']['Mammalia']['Carnivora']['Canidae']['Canis']['coyote']
+    taxonomy['Plantae']['Solanales']['Solanaceae']['Solanum']['tomato']
+    taxonomy['Plantae']['Solanales']['Solanaceae']['Solanum']['potato']
+    taxonomy['Plantae']['Solanales']['Convolvulaceae']['Ipomoea']['sweet potato']
+
+    print taxonomy.children()
+    print taxonomy.children()[0][0]
+    print taxonomy.children()[0][1].toDict()
+
+    print '----------'
+    print taxonomy.toDict()
+
+    print '----------'
+    print TagTree.fromDict(taxonomy.toDict()).toDict()
+
+
+    print '----------'
+    print 'Animalia' in taxonomy
+    print 'Chordata' in taxonomy['Animalia']
+    print 'XXX' in taxonomy['Animalia']

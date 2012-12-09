@@ -28,7 +28,9 @@ def importFile(src):
 
     fname = '%s%s' % (dig, os.path.splitext(src)[-1])
     fpath = os.path.join(dpath, fname)
+    isNew = False
     if not os.path.exists(fpath):
+        isNew = True
         shutil.copy2(src, os.path.join(dpath, fname))
 
-    return fname
+    return fname, isNew
