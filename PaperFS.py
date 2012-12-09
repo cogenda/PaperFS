@@ -277,7 +277,6 @@ class DirSearch(DirObject):
         def __init__(self, obj):
             self.obj = obj
             self.curDot  = 0 # cursor for . and ..
-            self.curSrch = 0 # cursor for sub-searches
             self.curPapr = 0 # cursor for papers
 
         def next(self):
@@ -287,12 +286,6 @@ class DirSearch(DirObject):
             elif self.curDot==1:
                 self.curDot = 2
                 return '..'
-
-            if self.curSrch<len(self.obj.searches):
-                r = self.obj.searches[self.curSrch]
-                self.curSrch += 1
-                if isinstance(r, DirSearch):
-                    return r.name
 
             if self.curPapr<len(self.obj.papers):
                 r = self.obj.papers[self.curPapr]
@@ -312,8 +305,6 @@ class DirSearch(DirObject):
         self.papers = []
         self.mapPapers = {}
         self.statPapers = Stat(S_IFDIR|0755, Stat.DIRSIZE, st_nlink=2)
-
-        self.searches = []
 
     def _populate(self):
         if self.populated: return
@@ -424,7 +415,7 @@ class DirPaper(DirObject):
         self.pdf = None
         if not paper.path is None:
             self.pdf = PDFFile(u'%s.pdf'%cleanFilename(paper.title),
-                               os.path.join(repoDir, paper.path[0:2], paper.path),
+                               os.path.join(self.fsys.repoDir, 'repo', paper.path[0:2], paper.path),
                                self)
 
 
@@ -602,7 +593,9 @@ class JsonFile(FileObject):
 class PaperFS(LoggingMixIn, Operations):
     'Example memory filesystem. Supports only one level of files.'
 
-    def __init__(self):
+    def __init__(self, repoDir):
+        self.repoDir = repoDir
+
         self.cntFH = 0
 
     def _init_data(self):
@@ -624,13 +617,39 @@ class PaperFS(LoggingMixIn, Operations):
                           index=IndexByTitle(self.db))
         root.appendChild(dirIdx)
 
-        dirIdx = DirIndex(u'By Tags', parent=root,
-                          index=IndexByTag(self.db))
+        # Tag Tree
+        fntag = os.path.join(self.repoDir, 'tags.json')
+        if os.path.exists(fntag):
+            f = open(fntag)
+            self.tagTree = DataModel.TagTree.fromJson(f.read())
+            f.close()
+        else:
+            self.tagTree = DataModel.TagTree()
+
+        def makeTagTree(pDir, pparts, tree):
+
+            for tag, subtree in tree.children():
+                parts = [tag] + pparts
+                fulltag = ':'.join(parts)
+
+                if subtree.childCount()==0:
+                    search = ByTag(self.db, fulltag.lower())
+                    pDir.appendChild(DirSearch(tag, parent=pDir, search=search))
+                else:
+                    cDir = DirSimple(tag, parent=pDir)
+                    pDir.appendChild(cDir)
+                    makeTagTree(cDir, parts, subtree)
+        dirIdx = DirSimple(u'By Tags', parent=root)
+        makeTagTree(dirIdx, [], self.tagTree)
+
+        #dirIdx = DirIndex(u'By Tags', parent=root,
+        #                  index=IndexByTag(self.db))
         root.appendChild(dirIdx)
         self.root = root
 
     def init(self, path):
-        self.db = u1db.open('papers.u1db', create=False)
+        self.db = u1db.open(os.path.join(self.repoDir, 'papers.u1db'),
+                            create=False)
         self._init_data()
 
     def newFileHandle(self, obj=None):
@@ -772,6 +791,7 @@ if __name__ == '__main__':
         print('usage: %s <mountpoint>' % argv[0])
         exit(1)
 
+    repoDir = os.getcwd()
     logging.getLogger().setLevel(logging.DEBUG)
-    fuse = FUSE(PaperFS(), argv[1], foreground=True, nothreads=True, fsname=u'Papers')
+    fuse = FUSE(PaperFS(repoDir), argv[1], foreground=True, nothreads=True, fsname=u'Papers')
 

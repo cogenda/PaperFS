@@ -260,7 +260,7 @@ class DlgImport(QDialog):
         self._tbMatches.setCurrentCell(0,0)
 
     def selectMatch(self):
-        pdfpath, isNew = Utils.importFile(self.matchedPaper.fpath)
+        pdfpath, isNew = Utils.importFile(self.matchedPaper.fpath, os.path.join(self.repoDir, 'repo'))
         if not isNew:
             QMessageBox.warning(self, 'Warning', 'File already in repository!')
 

@@ -1,9 +1,7 @@
-__all__=['repoDir', 'importFile']
+__all__=['importFile']
 
 import os, os.path, shutil
 import hashlib
-
-repoDir = '/home/hash/src/papers/repo'
 
 def digest_for_file(f, block_size=2**20):
     h = hashlib.sha1()
@@ -14,9 +12,9 @@ def digest_for_file(f, block_size=2**20):
         h.update(data)
     return h.hexdigest()
 
-def importFile(src):
+def importFile(src, repoDir):
     if not os.path.exists(src):
-        return None
+        return None, False
 
     f = open(src, 'rb')
     dig = digest_for_file(f)

@@ -4,7 +4,7 @@ import DataModel
 from Utils import *
 from datetime import datetime
 
-basedir = '/home/hash/Documents/Papers'
+basedir = '/home/hash/Documents/Papers.mac'
 
 class SimpleQuery(object):
     col_map = []
@@ -185,7 +185,7 @@ def importPapers(conn, db, grp_tags):
 
         if not row['path'] is None:
             pdfpath = os.path.join(basedir, row['path'])
-            pdfpath, _ = importFile(pdfpath)
+            pdfpath, _ = importFile(pdfpath, os.path.join(repoDir, 'repo'))
             kwargs['path'] = pdfpath
 
         p = DataModel.Paper(**kwargs)
@@ -193,9 +193,10 @@ def importPapers(conn, db, grp_tags):
 
         db.create_doc(p.toDict())
 
+repoDir = os.getcwd()
 
 conn = sqlite3.connect(os.path.join(basedir, 'lib.papers'))
-db = u1db.open('papers.u1db', create=True)
+db = u1db.open(os.path.join(repoDir, 'papers.u1db'), create=True)
 
 grp_tags = importGroups(conn)
 ftags = open('tags.pkl', 'w')
@@ -213,6 +214,22 @@ db.create_index('by-author-name',
 db.create_index('by-title-words', 'split_words(lower(title))')
 db.create_index('by-year',  'year')
 db.create_index('by-tags',  'lower(tags)')
+
+# convert tags
+itags = pickle.load(open('tags.pkl'))
+
+tagtree = DataModel.TagTree()
+
+for _, lst in itags.iteritems():
+    fulltag = lst[0]
+    parts = fulltag.split(':')
+
+    tr = tagtree
+    for tag in reversed(parts):
+        tr = tr[tag]
+
+with open(os.path.join(repoDir, 'tags.json'), 'w') as f:
+    f.write(tagtree.toJson())
 
 db.close()
 conn.close()

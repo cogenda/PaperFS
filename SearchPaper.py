@@ -94,7 +94,6 @@ class IndexByAuthor(Index):
 class ByTag(Search):
     def __init__(self, db, key):
         super(ByTag, self).__init__(db)
-
         self.key = key
 
     def execute(self):

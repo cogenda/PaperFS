@@ -167,6 +167,9 @@ class TagTree(object):
     def __getitem__(self, tag):
         return self._tree[tag]
 
+    def childCount(self):
+        return len(self._tree)
+
     def children(self):
         return [(k,TagTree(self._tree[k])) for k in sorted(self._tree.keys())]
 
