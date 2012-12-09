@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from PyQt4.QtGui import *
 from PyQt4.QtCore import *
 import sys, os.path, StringIO, shutil
@@ -19,14 +21,13 @@ class DlgImport(QDialog):
             self.matches = []
             self.paper   = None
 
-    def __init__(self, parent=None, repoDir=None):
+    def __init__(self, repoDir, parent=None):
+        self.repoDir = repoDir
+
         super(DlgImport, self).__init__(parent)
+
         self.matchedPaper = self.MatchedPaper()
 
-        if repoDir:
-            self.repoDir = repoDir
-        else:
-            self.repoDir = os.getcwd()
         self.db = u1db.open(os.path.join(self.repoDir, 'papers.u1db'), create=False)
 
         self.setWindowTitle('Import From PDF Files')
@@ -393,12 +394,40 @@ class DlgImport(QDialog):
         print 'exiting'
         self.db.close()
 
+def makeEmptyRepo(repoDir):
+    db = u1db.open(os.path.join(repoDir, 'papers.u1db'), True)
+    db.close()
+
+    tags = DataModel.TagTree()
+    tags['Stats']
+    tags['Stats']['Monte Carlo']
+    tags['Stats']['Bayesian Inference']
+    tags['Important']
+    tags['My Work']
+
+    f=open(os.path.join(repoDir, 'tags.json'), 'w')
+    f.write(tags.toJson())
+    f.close()
+
+    os.mkdir(os.path.join(repoDir, 'repo'))
+    os.mkdir(os.path.join(repoDir, 'mnt'))
 
 if __name__ == '__main__':
-
     app = QApplication(sys.argv)
 
-    dlg = DlgImport()
+    repoDir = os.getcwd()
+    if not os.path.exists(os.path.join(repoDir, 'papers.u1db')):
+        ret = QMessageBox.question(None, 'Create Repository',
+                                   'Create repository in %s, OK?'%repoDir,
+                                   QMessageBox.Yes|QMessageBox.No,
+                                   QMessageBox.Yes)
+        if not ret==QMessageBox.Yes:
+            sys.exit()
+
+        makeEmptyRepo(repoDir)
+
+
+    dlg = DlgImport(repoDir)
     dlg.show()
 
     app.exec_()

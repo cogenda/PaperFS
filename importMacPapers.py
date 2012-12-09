@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import sqlite3, os.path, pickle
 import u1db
 import DataModel
