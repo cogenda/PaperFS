@@ -513,6 +513,10 @@ class DirSimple(DirObject):
         dTag = DirSearch(u'By Tags', parent=dobj, search=s)
         dobj.appendChild(dTag)
 
+        s = ByTitleWords(self.fsys.db, key)
+        dTitle = DirSearch(u'By Title Words', parent=dobj, search=s)
+        dobj.appendChild(dTitle)
+
 class PDFFile(FileObject):
     '''
     PDF File
