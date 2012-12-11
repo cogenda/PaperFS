@@ -627,6 +627,9 @@ class PaperFS(LoggingMixIn, Operations):
             self.tagTree = DataModel.TagTree()
 
         def makeTagTree(pDir, pparts, tree):
+            fulltag = ':'.join(pparts)
+            search = ByTag(self.db, fulltag.lower())
+            pDir.appendChild(DirSearch('All', parent=pDir, search=search))
 
             for tag, subtree in tree.children():
                 parts = [tag] + pparts
